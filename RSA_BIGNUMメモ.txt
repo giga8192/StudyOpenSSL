@@ -1,0 +1,256 @@
+○RSA構造体 (これはopenssl バージョン3のやつ)
+typedef struct rsa_st RSA;
+
+struct rsa_st {
+    /*
+     * #legacy
+     * The first field is used to pickup errors where this is passed
+     * instead of an EVP_PKEY.  It is always zero.
+     * THIS MUST REMAIN THE FIRST FIELD.
+     */
+    int dummy_zero; // offset+0
+
+    OSSL_LIB_CTX *libctx; // offset+4
+    int32_t version; // offset+12
+    const RSA_METHOD *meth; // offset+16
+    /* functional reference if 'meth' is ENGINE-provided */
+    ENGINE *engine; // offset+24
+    BIGNUM *n; // offset+32
+    BIGNUM *e; // offset+40
+    BIGNUM *d;
+    BIGNUM *p;
+    BIGNUM *q;
+    BIGNUM *dmp1;
+    BIGNUM *dmq1;
+    BIGNUM *iqmp;
+// 一部略
+}
+
+先頭のフィールドdummy_zeroは0になっている
+
+○BIGNUMとは
+
+任意のサイズの整数の計算を行うためのライブラリ
+BIGNUM構造体が1つの大きな整数を扱う。
+この構造体はopaqueであるべきで、フィールドを直接操作してはならない。
+
+
+typedef struct bignum_st BIGNUM;
+
+
+下記のtypedefは古い可能性がある。
+typedef struct bignum_st {
+    int top;	/* Index of last used d. */
+    BN_ULONG *d;/* Pointer to an array of 'BITS2' bit chunks. */
+    int max;	/* Size of the d array. */
+    int neg;
+ } BIGNUM;
+
+検証環境では、OpenSSLのバージョンは1.1.1fであり3系とは異なる。
+user01@attacker-vm:~/Programming/opensslTest$ openssl version
+OpenSSL 1.1.1f  31 Mar 2020
+
+
+だった。この自分の環境のbn_local.hは無いが、githubからDLした現行版だと
+(crypto/bn_local.h)
+struct bignum_st {
+    BN_ULONG *d;                /*
+                                 * Pointer to an array of 'BN_BITS2' bit
+                                 * chunks. These chunks are organised in
+                                 * a least significant chunk first order.
+                                 */
+    int top;                    /* Index of last used d +1. */
+    /* The next are internal book keeping for bn_expand. */
+    int dmax;                   /* Size of the d array. */
+    int neg;                    /* one if the number is negative */
+    int flags;
+};
+
+
+であって、*dの位置が異なっていた。
+gdbで自分の環境をデバッグしているときに位置が合わないことに気づいた。
+
+
+char hexStr1[] = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+c = BN_new();
+printf("16進数文字列%sからBIGNUMを生成する.生成先c:%p\n",hexStr1, c);
+BN_hex2bn(&c, hexStr1);
+
+c->dの示す先を見ると(現行版の定義にしたがって)
+gdb-peda$ x/32bx $var1
+0x5555555597c0:	0x1f	0x1e	0x1d	0x1c	0x1b	0x1a	0x19	0x18
+0x5555555597c8:	0x17	0x16	0x15	0x14	0x13	0x12	0x11	0x10
+0x5555555597d0:	0x0f	0x0e	0x0d	0x0c	0x0b	0x0a	0x09	0x08
+0x5555555597d8:	0x07	0x06	0x05	0x04	0x03	0x02	0x01	0x00
+
+8バイト単位区切りでsそれぞれがリトルエンディアン形式、8バイトのブロックも最下位のブロックが
+メモリのアドレスの先頭に来ている。(BIGNUM構造体のポインタをたどれば)
+
+
+○検証環境のファイル
+user01@attacker-vm:~/Programming/opensslTest$ ldd rsaTest2
+	linux-vdso.so.1 (0x00007ffd41cff000)
+	libcrypto.so.1.1 => /lib/x86_64-linux-gnu/libcrypto.so.1.1 (0x00007f356d8e2000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f356d6f0000)
+	libdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x00007f356d6ea000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007f356d6c7000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007f356dbd3000)
+
+cryptoバージョン1.1と思われる
+
+/usr/include/openssl/bn.h
+typedef struct rsa_st RSA;
+
+(/usr/includeにはない)
+(OpenSSL_1_1_1-stableのソース内から確認)
+crypto/rsa/rsa_local.h
+
+struct rsa_st {
+    /*
+     * The first parameter is used to pickup errors where this is passed
+     * instead of an EVP_PKEY, it is set to 0
+     */
+    int pad;
+    int32_t version;
+    const RSA_METHOD *meth;
+    /* functional reference if 'meth' is ENGINE-provided */
+    ENGINE *engine;
+    BIGNUM *n; // offset+24
+    BIGNUM *e; // offset+32
+    BIGNUM *d;
+    BIGNUM *p;
+    BIGNUM *q;
+    BIGNUM *dmp1;
+    BIGNUM *dmq1;
+    BIGNUM *iqmp;
+    /* for multi-prime RSA, defined in RFC 8017 */
+    STACK_OF(RSA_PRIME_INFO) *prime_infos;
+    /* If a PSS only key this contains the parameter restrictions */
+    RSA_PSS_PARAMS *pss;
+    /* be careful using this if the RSA structure is shared */
+    CRYPTO_EX_DATA ex_data;
+    CRYPTO_REF_COUNT references;
+    int flags;
+    /* Used to cache montgomery values */
+    BN_MONT_CTX *_method_mod_n;
+    BN_MONT_CTX *_method_mod_p;
+    BN_MONT_CTX *_method_mod_q;
+    /*
+     * all BIGNUM values are actually in the following data, if it is not
+     * NULL
+     */
+    char *bignum_data;
+    BN_BLINDING *blinding;
+    BN_BLINDING *mt_blinding;
+    CRYPTO_RWLOCK *lock;
+};
+
+検証環境でのRSAの定義は、上記のものと考えられた。nのオフセットが+24だったので
+そこを計算し、ポインタでBIGNUMをたどると設定した公開鍵のBIGNUMを確認することができた。
+n:modulus
+gdb-peda$ x/8x rsa
+0x555555570b40:	0x0000000000000000	0x00007ffff7fade80
+0x555555570b50:	0x0000000000000000	0x0000555555570cd0
+0x555555570b60:	0x0000555555570d30	0x0000555555570d50
+0x555555570b70:	0x0000555555570cf0	0x0000555555570d10
+gdb-peda$ set $n=0x0000555555570cd0
+gdb-peda$ x/x $n
+0x555555570cd0:	0x0000555555570d90
+gdb-peda$ set $d=0x0000555555570d90
+gdb-peda$ x/x $d
+0x555555570d90:	0xe6a21b410d4acad3
+gdb-peda$ x/8x $d
+0x555555570d90:	0xe6a21b410d4acad3	0xd07d72ee35d5239a
+0x555555570da0:	0x8792eacaa50968b2	0x019223b0a018c03f
+0x555555570db0:	0xfaecf24a6f9ae873	0x86f0b72426e78a03
+0x555555570dc0:	0x43ec0fafe1fbdefa	0x8f38af7588b9aab9
+
+
+イメージとしては
+rsa構造体
+↓
+rsa->n(+24) (BIGNUM *n)
+↓
+BN_ULONG *d;
+
+とたどるイメージ
+
+e,dの場合等も同様
+
+○RSAの暗号化
+
+
+struct rsa_st {
+    /*
+     * The first parameter is used to pickup errors where this is passed
+     * instead of an EVP_PKEY, it is set to 0
+     */
+    int pad;
+    int32_t version;
+    const RSA_METHOD *meth;
+
+// 以下略
+}
+ちなみに
+typedef struct rsa_meth_st RSA_METHOD;
+struct rsa_meth_st {
+    char *name;
+    int (*rsa_pub_enc) (int flen, const unsigned char *from,
+                        unsigned char *to, RSA *rsa, int padding);
+    int (*rsa_pub_dec) (int flen, const unsigned char *from,
+                        unsigned char *to, RSA *rsa, int padding);
+    int (*rsa_priv_enc) (int flen, const unsigned char *from,
+                         unsigned char *to, RSA *rsa, int padding);
+    int (*rsa_priv_dec) (int flen, const unsigned char *from,
+                         unsigned char *to, RSA *rsa, int padding);
+    // 以下略
+};
+
+であり、RSA_METHODは関数ポインタの集まりだった。
+RSAの初期化処理RSA_new()の過程で
+methに設定される.追いかける
+
+1. RSA *RSA_new(void)
+   RSA_new_method(NULL);
+
+2. RSA *RSA_new_method(ENGINE *engine)
+
+   RSA *ret = OPENSSL_zalloc(sizeof(*ret));
+   ~~
+   ret->meth = RSA_get_default_method();
+
+3.　const RSA_METHOD *RSA_get_default_method(void)
+　　return default_RSA_meth;
+
+4.  default_RSA_meth の内容
+    static const RSA_METHOD *default_RSA_meth = &rsa_pkcs1_ossl_meth;
+
+5. rsa_pkcs1_ossl_meth がRSA_METHOD構造体の具体的な内容
+static RSA_METHOD rsa_pkcs1_ossl_meth = {
+    "OpenSSL PKCS#1 RSA",
+    rsa_ossl_public_encrypt,
+    rsa_ossl_public_decrypt,     /* signature verification */
+    rsa_ossl_private_encrypt,    /* signing */
+    rsa_ossl_private_decrypt,
+    rsa_ossl_mod_exp,
+    BN_mod_exp_mont,            /* XXX probably we should not use Montgomery
+                                 * if e == 3 */
+    rsa_ossl_init,
+    rsa_ossl_finish,
+    RSA_FLAG_FIPS_METHOD,       /* flags */
+    NULL,
+    0,                          /* rsa_sign */
+    0,                          /* rsa_verify */
+    NULL,                       /* rsa_keygen */
+    NULL                        /* rsa_multi_prime_keygen */
+};
+
+rsa_ossl_public_encrypt等は
+
+static int rsa_ossl_public_encrypt(int flen, const unsigned char *from,
+                                  unsigned char *to, RSA *rsa, int padding);
+
+
+
+
+

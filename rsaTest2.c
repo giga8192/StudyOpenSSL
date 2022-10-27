@@ -1,0 +1,134 @@
+// RSAをパラメータを手動で指定した上で暗号化
+// gcc -o rsaTest2 rsaTest2.c -lcrypto -g
+
+// パディングについてはなしにしても、サイズなどに条件があるよう
+#include<stdio.h>
+#include<string.h>
+#include<openssl/crypto.h>
+#include<openssl/rsa.h>
+#include<openssl/bn.h>
+#include <openssl/engine.h>
+#include <openssl/err.h>
+
+#define BN_PUT(bn) { printf(#bn "=%s (0x%s)\n", BN_bn2dec(bn), BN_bn2hex(bn)); }
+
+void ShowRSAInfo(RSA *rsa);
+
+// RSAの情報を表示
+void ShowRSAInfo(RSA *rsa){
+  BN_PUT(RSA_get0_n(rsa));
+  BN_PUT(RSA_get0_p(rsa));
+  BN_PUT(RSA_get0_q(rsa));
+  BN_PUT(RSA_get0_e(rsa));
+  BN_PUT(RSA_get0_d(rsa));
+}
+
+int main(void) {
+  unsigned char plain_buf[]="HelloWorld";
+  // unsigned char plain_buf[]="Hello";
+  unsigned char *crypted_buf;
+  unsigned char *decrypted_buf;
+  int crypted_len;
+  int decrypted_len;
+  char errbuf[1024];
+  RSA *rsa;
+  BIGNUM *n, *p, *q, *e, *d;
+  BN_CTX *ctx;
+  ERR_load_crypto_strings();
+
+  rsa = RSA_new(); // 初期化
+  ctx = BN_CTX_new();
+
+  // BNの初期化
+  n = BN_new();
+  p = BN_new();
+  q = BN_new();
+  e = BN_new();
+  d = BN_new();
+
+  // n =835053554220986254394447853637, 
+  // p=92709568269121, q = 9007199254740997, e=13, d=642348887862290118835096033477に設定
+  
+  /*
+  BN_dec2bn(&n, "835053554220986254394447853637");
+  BN_dec2bn(&p, "92709568269121");
+  BN_dec2bn(&q, "9007199254740997");
+  BN_dec2bn(&e, "13");
+  BN_dec2bn(&d, "642348887862290118835096033477");
+  */
+
+  // n=0xC477DFF832BDE53B759BBF5831BA981370B370DF8E87C6266097FBB264945D5763AC46A9C9C59F04F158074DFD0B1EF01FE162F986ABAD590AEEBDB7E28439F878BF8001F2E53731C5673C0B139A8FDC9798FC9765969EFBB97B75BB1B806D50BD4A687AEE35B6A5082062ACFC0102BDFE5B5E669D1BC72C12E4A9F56450D4B6258963C99991E3022F2ADCAB9AC1F68233AE9F4D9C8E74DEBAE8DFC971F10822D62FFE63A30C88589E1E18AEE7D3835F5AE2540B5CD294962E7B1D86CAD0E8DE8F38AF7588B9AAB943EC0FAFE1FBDEFA86F0B72426E78A03FAECF24A6F9AE873019223B0A018C03F8792EACAA50968B2D07D72EE35D5239AE6A21B410D4ACAD3
+  BN_dec2bn(&n, "24801820280299278407229424461001645220178075668918208201905245456623709252411253647000005085836980841168180661621076845430251102422676414442951036708697379651288427136817053065240115324392699313654977850856912666131829631322489923641898730118370362821096824613837194662452766282024650065168284598520080542500870125098213742512828168199091682791402408691945378630677872547590728081499591614818279486218739077035673274418952604543006334003577394305144269974866866052219518864788399543368039833682111306951381904039770379905848807410314833514942360847909011258226711600613529577112458786972129074259445005648905917614803");
+  BN_dec2bn(&p, "158891120796390223709895287581051369648174726395823128018632869037888480275203864819064471965448934528042414015822578033221158491333858412904781888719858688082572329189880522706493450674402794821513621942045205728605939040858630279788802393583278213424935141360918419681773617822024230447788143272047709289749");
+  BN_dec2bn(&q, "156093179757233733771762403249363250386399728271214556901748668041554476238650076321325439597189775919243395235949679592062461419494789844380821118660698194341971068697634988137050284745590802252804567631989498072031437877683490299968211887878935502579080179365963247785916180291897141941679826463828591653447");
+  BN_dec2bn(&e, "65537");
+  BN_dec2bn(&d, "22438084230880640188642138116136663972253509994138112554727312943355300750487749515300933847206317516116126762106524058812655722931213013850756212788125430472931964132765001347195502963189763568761421666465618030847037714127008408420461992575923481117928068544166213112157818722668470131588152679110336076497252160657858401960191189016056866367831457951423930192332688397458299988487867500954205269861831436217588250869391182829526793128662677600799368649300864503811799295177080354187861790470409404402413670054899277842349984364369683120070713997759999284006376323767631127618719168078978177999798715783747181013417");
+  
+  // 公開鍵n、e, 秘密鍵dをセット
+  RSA_set0_key(rsa, n,e,d);
+  RSA_set0_factors(rsa, p,q);
+  ShowRSAInfo(rsa);
+  
+  
+  /* 暗号文・復号文の領域を確保 */
+  //RSA_sizeはrsa暗号のmodulusのサイズを返す。これにより暗号文のために用意するバッファのサイズが確認できる
+  printf("Debug: RSA_size(rsa) = %d\n",RSA_size(rsa));
+  crypted_buf = malloc(RSA_size(rsa)); 
+  if ( crypted_buf == NULL ){
+      perror("malloc");
+      exit(1);
+  }
+  decrypted_buf = malloc(RSA_size(rsa));
+  if ( decrypted_buf == NULL ){
+      perror("malloc");
+      exit(1);
+  }
+
+  /* (秘密鍵を使用)暗号化 */
+  // 引数は　1:平文の長さ, 2: 平文バッファ, 3:暗号化データを格納するバッファ, 4:rsa構造体, 5: パディング方式
+  //  PKCS#1 によってパディング方式が定められている。
+  crypted_len = RSA_private_encrypt(strlen(plain_buf), plain_buf, crypted_buf, rsa, RSA_PKCS1_PADDING);
+  // crypted_len = RSA_private_encrypt(strlen(plain_buf), plain_buf, crypted_buf, rsa, RSA_NO_PADDING);
+  if ( crypted_len == -1 ){
+      printf("in encrypt: err=%s\n", ERR_error_string(ERR_get_error(), errbuf));
+      exit(1);
+  }
+
+/* 復号 */
+    decrypted_len = RSA_public_decrypt(crypted_len, crypted_buf, decrypted_buf, rsa, RSA_PKCS1_PADDING);
+    // decrypted_len = RSA_public_decrypt(crypted_len, crypted_buf, decrypted_buf, rsa, RSA_NO_PADDING);
+    if ( decrypted_len == -1 ){
+        printf("in decrypt: err=%s\n", ERR_error_string(ERR_get_error(), errbuf));
+        exit(1);
+    }
+
+    printf("平文=[%s]\n", plain_buf);
+    {
+        int i;
+        printf("暗号文=[0x");
+        for ( i=0 ; i<crypted_len ; i++ ){
+            printf("%X", crypted_buf[i]);
+        }
+        printf("] (16進数)\n");
+    }
+    printf("暗号文の復号結果=[%.*s]\n", decrypted_len, decrypted_buf);
+
+    /*  */
+    if ( strncmp(plain_buf, decrypted_buf, decrypted_len) != 0 ){
+        printf("一致しません\n");
+        exit(1);
+    }
+
+  // クリアと解放
+  /*
+  BN_clear_free(n);
+  BN_clear_free(p);
+  BN_clear_free(q);
+  BN_clear_free(e);
+  BN_clear_free(d);
+  */
+
+  RSA_free(rsa); // free
+  printf("完了\n");
+  return 0;
+}
